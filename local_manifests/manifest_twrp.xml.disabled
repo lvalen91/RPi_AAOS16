@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+    <!--
+    TWRP Recovery for AAOS on Raspberry Pi 5
+
+    This manifest replaces AOSP's stock recovery with TWRP.
+    Uses official TeamWin repos with android-14.1 branch (latest available).
+    Includes twrp-raspberry device tree for Raspberry Pi support.
+    -->
+
+    <!-- GitHub remote -->
+    <remote name="github"
+            fetch="https://github.com/" />
+
+    <!-- Remove AOSP stock recovery -->
+    <remove-project name="platform/bootable/recovery" />
+
+    <!-- Add TWRP recovery (android-14.1 branch - latest available) -->
+    <project name="TeamWin/android_bootable_recovery"
+             path="bootable/recovery"
+             remote="github"
+             revision="android-14.1" />
+
+    <!-- TWRP vendor components (official TeamWin repo) -->
+    <project name="TeamWin/android_vendor_twrp"
+             path="vendor/twrp"
+             remote="github"
+             revision="android-14.1" />
+
+    <!-- Raspberry Pi device tree for TWRP (from twrp-raspberry project) -->
+    <project name="twrp-raspberry/android_device_brcm_rpi"
+             path="device/brcm/rpi-twrp"
+             remote="github"
+             revision="twrp-11" />
+</manifest>

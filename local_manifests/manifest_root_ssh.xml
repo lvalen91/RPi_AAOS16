@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+    <!--
+    Root and SSH support for AAOS on Raspberry Pi 5
+
+    Note: This manifest no longer references external repositories.
+    SSH support uses AOSP's built-in external/openssh package.
+    Root access is provided by the eng build variant.
+
+    The build_aaos.sh script configures:
+    - PRODUCT_PACKAGES += scp sftp ssh sshd ssh-keygen
+    - SSH service via init.root.rc
+    - Root properties via root_props.mk
+    -->
+</manifest>

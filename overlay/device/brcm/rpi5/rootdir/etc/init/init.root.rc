@@ -1,0 +1,57 @@
+# Root and SSH services for AAOS on Raspberry Pi 5
+# This file enables root access and SSH server on boot
+
+# ADB as root service
+on property:sys.boot_completed=1
+    # Enable ADB root access
+    setprop service.adb.root 1
+    setprop ro.adb.secure 0
+    # Restart adbd to apply root settings
+    stop adbd
+    start adbd
+
+# OpenSSH Server (AOSP built-in)
+service sshd /system/bin/sshd -D
+    class main
+    user root
+    group root shell net_raw
+    disabled
+    seclabel u:r:shell:s0
+
+# Create SSH directories early (post-fs-data runs before boot_completed)
+on post-fs-data
+    mkdir /data/ssh 0700 root root
+    mkdir /data/ssh/empty 0700 root root
+    mkdir /data/.ssh 0700 root root
+
+# Generate SSH host keys and start service after boot completes
+on property:sys.boot_completed=1
+    # Ensure SSH directories exist (redundant but safe)
+    mkdir /data/ssh 0700 root root
+    # Generate host keys if they don't exist (use - prefix to ignore errors)
+    exec - root root -- /system/bin/ssh-keygen -A
+    # Start SSH server
+    start sshd
+
+# Permissive SELinux on boot (for development)
+on early-init
+    # Set SELinux to permissive for root access
+    write /sys/fs/selinux/enforce 0
+
+# UART serial console service (ttyAMA0 on physical pins 8/10, NOT ttyAMA10)
+service console /system/bin/sh
+    class core
+    console ttyAMA0
+    user root
+    group root shell log readproc
+    seclabel u:r:shell:s0
+    setenv TERM linux
+
+on boot
+    # Ensure root has full access
+    chmod 0755 /system/xbin/su
+    chmod 0755 /system/bin/su
+    # Enable UART console
+    chmod 0666 /dev/ttyAMA0
+    chown root shell /dev/ttyAMA0
+    start console
