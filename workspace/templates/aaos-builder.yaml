@@ -1,0 +1,189 @@
+# Lima VM template — AOSP Android 16 Automotive OS builder
+# =========================================================
+# Host:   macOS (Intel Mac Pro 2019, 24 physical cores / 240 GiB RAM)
+# Guest:  Ubuntu 22.04 LTS (canonical AOSP build host)
+# Driver: QEMU + HVF.
+#
+# Why not vz: the old note here said "Virtualization.framework is Apple
+# Silicon only". That is NOT true -- measured 2026-08-14, vz does boot an
+# x86_64 Linux guest on this Intel Mac. The real blocker is that VZ builds a
+# 36-bit guest physical address space, capping guest RAM at 64 GiB and
+# SILENTLY falling back to ~3 GiB for larger requests (63GiB ok, 64GiB ->
+# 3 GiB, no warning). QEMU with accel=hvf has no such cap. accel=hvf is real
+# hardware virtualisation, not emulation.
+# See docs/host-performance-2026-08-14.md.
+#
+# All VM state lives in $LIMA_HOME = /Volumes/stuff/virtual-machines/lima,
+# set by scripts/env.sh so nothing lands in ~/.lima.
+#
+# Resources target a BIG build: ~168 GB repo sync, ~127 GB AOSP out/ per
+# target, plus ccache (capped 200 GB, lives at $OUT_DIR/.ccache).
+
+vmType: "qemu"
+arch: "x86_64"
+os: "Linux"
+
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
+
+# Mac Pro 2019: 24 physical / 48 logical cores, 240 GiB RAM.
+#
+# 2026-08-14: raised to the full 24c/48t and 200 GiB at user request.
+# Verified safe: Soong caps its highmem (linker) pool at totalRAM/8GiB = 24
+# either way (build/soong/ui/build/config.go), so peak link memory is
+# unchanged vs the old 24-vCPU setting -- the extra threads only widen the
+# cheap compile pool. Worth ~3-5% build throughput.
+#
+# Cost: ~40 GiB and no spare cores for macOS during a build. Drop back to
+# cpus: 24 / memory: "192GiB" if the host becomes unusable.
+cpus: 48
+memory: "200GiB"
+disk: "600GiB"
+
+# CPU passthrough — with critical HVF workarounds on Intel.
+#
+# We TESTED `host,+invtsc` alone on 2026-04-13 on this exact host
+# (Xeon W-3265, macOS 26.5, QEMU 10.2, Lima 2.1.1) and the guest
+# kernel panic'd at boot with `invalid opcode at raid6_avx5124_
+# gen_syndrome`. HVF on Intel still advertises AVX-512 via CPUID
+# but does NOT execute EVEX-prefixed instructions, so kernel code
+# that probes AVX-512 and picks the fast path #UDs on first use.
+#
+# `-avx512vl` is MANDATORY.  `-pdpe1gb` (1 GiB hugepage) is a legacy
+# workaround for a long-fixed QEMU bug, cheap to retain. Keep both.
+# `+invtsc` is safe and gives the guest a stable TSC.
+#
+# See docs/build-tuning-2026-04-13.md for the full analysis; the
+# research doc's optimistic "safe to remove on QEMU 10.2" claim was
+# wrong for this host.
+vmOpts:
+  qemu:
+    cpuType:
+      x86_64: "host,-avx512vl,-pdpe1gb,+invtsc"
+
+# Host ↔ guest shares. We do NOT put the AOSP source tree on a host mount
+# because AOSP needs a case-sensitive filesystem AND symlink-heavy ops that
+# perform poorly over 9p / reverse-sshfs. Source lives inside the guest
+# disk. Only small artifacts (built images, helper scripts, overlays)
+# cross the boundary.
+mounts:
+  # Built flashable images land here; macOS can then write them to SD card.
+  - location: "/Volumes/stuff/rpi/aaos/out"
+    mountPoint: "/mnt/out"
+    writable: true
+  # In-VM helper scripts — editable on the host, executed in the guest.
+  - location: "/Volumes/stuff/rpi/aaos/scripts/vm"
+    mountPoint: "/mnt/scripts"
+    writable: false
+  # Overlays: custom local_manifests, init.rc snippets, SSH pubkeys, etc.
+  - location: "/Volumes/stuff/rpi/aaos/overlays"
+    mountPoint: "/mnt/overlays"
+    writable: false
+
+# Containerd stack not needed for AOSP builds.
+containerd:
+  system: false
+  user: false
+
+# -----------------------------------------------------------------------------
+# Networking — add a high-throughput socket_vmnet interface alongside the
+# default slirp/user-v2 NAT. The default `eth0` stays as a fallback for
+# `limactl shell` / hostfwd; the new `lima0` becomes the primary route for
+# the guest, with line-rate access to the host's 2.5 Gbps uplink. Without
+# this, QEMU slirp caps at ~500 Mbit/s regardless of host bandwidth.
+#
+# Requires socket_vmnet installed + chowned root + /etc/sudoers.d/lima — do
+# that with:  bash scripts/setup-vmnet.sh
+# -----------------------------------------------------------------------------
+# DISABLED 2026-08-14: socket_vmnet is no longer installed on this host, and
+# with this block enabled the VM fails to start. No proven throughput benefit
+# over slirp for this workload (repo sync is upstream-bound either way).
+# To restore: bash scripts/setup-vmnet.sh, then uncomment.
+# networks:
+#   - lima: shared     # socket_vmnet shared mode; VM gets 192.168.105.x DHCP
+#     # interface: lima0
+
+ssh:
+  loadDotSSHPubKeys: true
+  forwardAgent: false
+
+# One-shot provisioning on first boot. Idempotent: safe to rerun.
+provision:
+  - mode: system
+    script: |
+      #!/usr/bin/env bash
+      set -eux
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      # AOSP 16 build prerequisites + raspberry-vanilla extras + creature comforts
+      apt-get install -y --no-install-recommends \
+        git git-core gnupg flex bison gperf build-essential \
+        zip curl zlib1g-dev gcc-multilib g++-multilib \
+        libc6-dev-i386 libncurses5 libncurses5-dev lib32ncurses5-dev \
+        x11proto-core-dev libx11-dev lib32z1-dev ccache \
+        libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig \
+        openjdk-17-jdk python3 python3-pip python-is-python3 \
+        libssl-dev bc cpio rsync lz4 wget ca-certificates \
+        dosfstools e2fsprogs fdisk kpartx mtools \
+        imagemagick schedtool android-sdk-libsparse-utils \
+        nano vim less htop tmux jq file tree
+
+      # Google repo tool
+      curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo \
+        -o /usr/local/bin/repo
+      chmod a+x /usr/local/bin/repo
+
+      # Raise file descriptor + inotify limits for AOSP
+      if ! grep -q 'AOSP build' /etc/security/limits.conf; then
+        cat >> /etc/security/limits.conf <<'EOF'
+      # AOSP build
+      * soft nofile 65536
+      * hard nofile 65536
+      EOF
+      fi
+      echo 'fs.inotify.max_user_watches=524288' > /etc/sysctl.d/99-aosp.conf
+      sysctl --system || true
+
+  - mode: user
+    script: |
+      #!/usr/bin/env bash
+      set -eux
+      mkdir -p "$HOME/aosp" "$HOME/.ccache"
+      # 200 GB ccache — this is a 240 GiB Mac Pro, not a laptop; host
+      # volume has >1 TiB free. Bigger cache = more hits across Pi 4/5
+      # lunch targets and across rebuilds.
+      ccache -M 200G || true
+      if ! grep -q 'AOSP build env' "$HOME/.bashrc"; then
+        cat >> "$HOME/.bashrc" <<'EOF'
+
+      # --- AOSP build env ---
+      # NB: Ubuntu's .bashrc returns early for non-interactive shells, so
+      # build-aaos.sh also re-exports these. Keeping them here for anyone
+      # running `limactl shell` interactively.
+      export USE_CCACHE=1
+      export CCACHE_EXEC=/usr/bin/ccache
+      export CCACHE_DIR=$HOME/.ccache
+      export PATH=/usr/local/bin:$PATH
+      # Soong/Ninja pool logic picks the right job count; no manual -j cap.
+      # Uncomment only if local-manifest churn produces missing-dep errors:
+      # export SOONG_ALLOW_MISSING_DEPENDENCIES=true
+      EOF
+      fi
+      # Git defaults — user can override inside the VM
+      git config --global user.email  "builder@aaos-rpi.local" 2>/dev/null || true
+      git config --global user.name   "AAOS Builder"           2>/dev/null || true
+      git config --global http.postBuffer 1048576000           2>/dev/null || true
+      git config --global color.ui    auto                     2>/dev/null || true
+
+probes:
+  - description: "repo tool + OpenJDK 17 are installed"
+    script: |
+      #!/usr/bin/env bash
+      set -eux
+      command -v repo
+      java -version
+    hint: |
+      Provisioning failed. Check with:
+        limactl shell aaos-builder sudo cloud-init status --long
+        limactl shell aaos-builder sudo journalctl -u cloud-final --no-pager -n 200

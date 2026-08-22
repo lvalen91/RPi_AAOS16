@@ -1,0 +1,134 @@
+From 16b8fc95be2c3cb14604e9b2d1bc18a2e7d51282 Mon Sep 17 00:00:00 2001
+From: zeno <lvalentinzeno@gmail.com>
+Date: Sat, 22 Aug 2026 02:16:47 -0800
+Subject: [PATCH] wifi: fall back to nl80211 when the vendor HAL cannot set a
+ country code
+
+BOARD_WLAN_DEVICE=bcmdhd makes libwifi-hal link Broadcom's vendor HAL, whose
+wifi_set_country_code() drives BRCM-OUI nl80211 vendor subcommands belonging to
+the out-of-tree DHD driver. A Raspberry Pi 4 runs upstream brcmfmac, which
+implements none of them, so the call returns NOT_SUPPORTED.
+
+That one gap blocks ALL 5 GHz SoftAP: SoftApManager requires a country code
+before bringing up a 5 GHz AP (it does not for 2.4 GHz). Verified on hardware
+2026-08-16 -- it forced a standalone hostapd and a from-scratch DHCP server to
+live outside the Wi-Fi framework entirely, because Android's bundled dnsmasq is
+2.51 (2009) and its --dhcp-broadcast is unrecognised, silently disabling DHCP.
+
+When the vendor path fails, set the kernel regulatory domain directly with
+NL80211_CMD_REQ_SET_REG -- the same request `iw reg set` makes. The fallback
+only runs after the vendor HAL has already failed, so hardware with a working
+vendor HAL is unaffected. libnl was already a dependency.
+
+Change-Id: Ic8bf6d1e3e2eb2e5ee9e152078c41d2bb7f7c2c5
+---
+ wifi/aidl/default/wifi_ap_iface.cpp | 79 +++++++++++++++++++++++++++++
+ 1 file changed, 79 insertions(+)
+
+diff --git a/wifi/aidl/default/wifi_ap_iface.cpp b/wifi/aidl/default/wifi_ap_iface.cpp
+index 6a73cc821f..d14fce1a1d 100644
+--- a/wifi/aidl/default/wifi_ap_iface.cpp
++++ b/wifi/aidl/default/wifi_ap_iface.cpp
+@@ -17,6 +17,10 @@
+ #include "wifi_ap_iface.h"
+ 
+ #include <android-base/logging.h>
++#include <linux/nl80211.h>
++#include <netlink/genl/ctrl.h>
++#include <netlink/genl/genl.h>
++#include <netlink/netlink.h>
+ 
+ #include "aidl_return_util.h"
+ #include "aidl_struct_util.h"
+@@ -28,6 +32,69 @@ namespace hardware {
+ namespace wifi {
+ using aidl_return_util::validateAndCall;
+ 
++namespace {
++
++// Ask the kernel to adopt a regulatory domain directly, which is exactly the
++// request `iw reg set <cc>` makes.
++//
++// Why this exists: BOARD_WLAN_DEVICE is bcmdhd, so libwifi-hal links Broadcom's
++// vendor HAL, and its wifi_set_country_code() drives BRCM-OUI nl80211 vendor
++// subcommands that belong to the out-of-tree DHD driver. This board runs
++// upstream brcmfmac, which implements none of them, so the call comes back
++// NOT_SUPPORTED.
++//
++// That single gap blocks ALL 5 GHz SoftAP: SoftApManager requires a country
++// code before it will bring up a 5 GHz AP (it does not for 2.4 GHz), so the AP
++// never starts. Verified on a Pi 4, 2026-08-16 — it forced a standalone hostapd
++// and a from-scratch DHCP server to sit outside the Wi-Fi framework entirely.
++//
++// The fallback is deliberately narrow: it only runs after the vendor path has
++// already failed, so on hardware whose vendor HAL works, behaviour is unchanged.
++bool setRegDomainViaNl80211(const std::array<uint8_t, 2>& code) {
++    const char alpha2[3] = {static_cast<char>(code[0]), static_cast<char>(code[1]), '\0'};
++
++    struct nl_sock* sock = nl_socket_alloc();
++    if (sock == nullptr) {
++        LOG(ERROR) << "setRegDomainViaNl80211: nl_socket_alloc failed";
++        return false;
++    }
++
++    bool ok = false;
++    if (genl_connect(sock) == 0) {
++        const int family = genl_ctrl_resolve(sock, "nl80211");
++        if (family >= 0) {
++            struct nl_msg* msg = nlmsg_alloc();
++            if (msg != nullptr) {
++                if (genlmsg_put(msg, NL_AUTO_PORT, NL_AUTO_SEQ, family, 0, 0,
++                                NL80211_CMD_REQ_SET_REG, 0) != nullptr &&
++                    nla_put_string(msg, NL80211_ATTR_REG_ALPHA2, alpha2) == 0 &&
++                    nl_send_auto(sock, msg) >= 0) {
++                    // REQ_SET_REG is acked. A non-zero ack means the driver
++                    // refused the domain (self-managed reg, or an unknown code).
++                    const int ack = nl_wait_for_ack(sock);
++                    ok = (ack == 0);
++                    if (!ok) {
++                        LOG(ERROR) << "setRegDomainViaNl80211: kernel refused " << alpha2
++                                   << ", nl error " << ack;
++                    }
++                } else {
++                    LOG(ERROR) << "setRegDomainViaNl80211: failed to build REQ_SET_REG";
++                }
++                nlmsg_free(msg);
++            }
++        } else {
++            LOG(ERROR) << "setRegDomainViaNl80211: nl80211 family not found: " << family;
++        }
++    } else {
++        LOG(ERROR) << "setRegDomainViaNl80211: genl_connect failed";
++    }
++
++    nl_socket_free(sock);
++    return ok;
++}
++
++}  // namespace
++
+ WifiApIface::WifiApIface(const std::string& ifname, const bool usesMlo,
+                          const std::vector<std::string>& instances,
+                          const std::weak_ptr<legacy_hal::WifiLegacyHal> legacy_hal,
+@@ -98,6 +165,18 @@ std::pair<std::string, ndk::ScopedAStatus> WifiApIface::getNameInternal() {
+ ndk::ScopedAStatus WifiApIface::setCountryCodeInternal(const std::array<uint8_t, 2>& code) {
+     legacy_hal::wifi_error legacy_status =
+             legacy_hal_.lock()->setCountryCode(getOperatingInstanceName(), code);
++    if (legacy_status == legacy_hal::WIFI_SUCCESS) {
++        return createWifiStatusFromLegacyError(legacy_status);
++    }
++    // The vendor HAL could not do it. Fall back to setting the kernel
++    // regulatory domain ourselves rather than reporting failure upward, because
++    // a failure here costs the caller every 5 GHz SoftAP. See
++    // setRegDomainViaNl80211 above for why this board always lands here.
++    LOG(WARNING) << "setCountryCode: vendor HAL returned " << legacy_status
++                 << "; falling back to nl80211 NL80211_CMD_REQ_SET_REG";
++    if (setRegDomainViaNl80211(code)) {
++        return ndk::ScopedAStatus::ok();
++    }
+     return createWifiStatusFromLegacyError(legacy_status);
+ }
+ 
+-- 
+2.34.1
+

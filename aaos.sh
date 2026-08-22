@@ -114,7 +114,7 @@ load_settings() {
         export HDMI_AUDIO_PORT="hdmi0"
         export MEDIA_VOLUME_DEFAULT="20"
         export MEDIA_VOLUME_STEPS="25"
-        export WIFI_COUNTRY_CODE="00"
+        export WIFI_COUNTRY_CODE="US"   # never "00": world domain is no-IR on all 5 GHz
         export WIFI_HOTSPOT_SSID="Raspberry Pi 5"
         export WIFI_5GHZ_ENABLED="yes"
         export WIFI_BACKGROUND_SCAN="yes"

@@ -1,0 +1,7 @@
+.DS_Store
+*.swp
+# Build workspace outputs — large, machine-specific, or regenerated.
+workspace/logs/
+workspace/out/
+workspace/snapshots/
+workspace/lima/

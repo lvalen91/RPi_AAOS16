@@ -1,0 +1,47 @@
+# Kernel
+arm_64bit=1
+kernel=Image
+
+# Ramdisk
+initramfs ramdisk.img followkernel
+
+# Audio
+dtparam=audio=on
+
+# Camera
+camera_auto_detect=1
+start_x=1
+
+# CPU
+arm_boost=1
+
+# Display
+disable_overscan=1
+
+# Display panel
+#dtoverlay=vc4-kms-dsi-7inch
+#dtoverlay=vc4-kms-dsi-ili79600-10-1inch
+#dtoverlay=vc4-kms-dsi-ili9881-5inch
+#dtoverlay=vc4-kms-dsi-ili9881-7inch
+
+# Graphics acceleration
+disable_fw_kms_setup=1
+dtoverlay=vc4-kms-v3d
+
+# I2C
+#dtparam=i2c_arm=on
+
+# I2S
+#dtparam=i2s=on
+
+# Serial console
+enable_uart=1
+
+# SPI
+#dtparam=spi=on
+
+# USB
+dtoverlay=dwc2,dr_mode=peripheral
+[cm4]
+dtoverlay=dwc2,dr_mode=otg
+[all]
