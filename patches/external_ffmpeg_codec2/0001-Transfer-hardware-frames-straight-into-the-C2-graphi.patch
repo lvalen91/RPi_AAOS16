@@ -1,5 +1,5 @@
 From ce7b2626d5e70c0791786a40259e60c0a06d5fd0 Mon Sep 17 00:00:00 2001
-From: zeno <lvalentinzeno@gmail.com>
+From: lvalen91 <40876073+lvalen91@users.noreply.github.com>
 Date: Sat, 22 Aug 2026 02:16:47 -0800
 Subject: [PATCH] Transfer hardware frames straight into the C2 graphic block
 
