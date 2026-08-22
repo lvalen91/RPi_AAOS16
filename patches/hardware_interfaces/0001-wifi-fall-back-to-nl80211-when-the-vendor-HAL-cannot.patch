@@ -1,4 +1,4 @@
-From 16b8fc95be2c3cb14604e9b2d1bc18a2e7d51282 Mon Sep 17 00:00:00 2001
+From a0658d67f00358442600507758bd5ae377a761f7 Mon Sep 17 00:00:00 2001
 From: lvalen91 <40876073+lvalen91@users.noreply.github.com>
 Date: Sat, 22 Aug 2026 02:16:47 -0800
 Subject: [PATCH] wifi: fall back to nl80211 when the vendor HAL cannot set a

@@ -68,10 +68,27 @@ equivalent to leaving it off.
 
 ## Status
 
-Applied and built successfully against `android-16.0.0_r4` +
-raspberry-vanilla `android-16.0`, 2026-08-22.
+Applied and built against `android-16.0.0_r4` + raspberry-vanilla `android-16.0`,
+2026-08-22, and **verified on a Pi 4 Rev 1.5** the same day.
 
-**Not yet booted on hardware.** Everything is verified present in the built
-image; the runtime behaviour of the Wi-Fi fallback, the decoder fast path and
-the USB audio retune has not been confirmed on a device. See
-`../workspace/docs/` for the per-item verification commands to run once it is.
+| Item | Result on hardware |
+|---|---|
+| `CONFIG_BT_RFCOMM=y` | `zcat /proc/config.gz` → `CONFIG_BT_RFCOMM=y` |
+| `miniuart-bt` removed | BT enables, `BCM4345C0` patchram loads, **zero** `Frame reassembly failed` / `tx timeout` / `hardware error` |
+| Wi-Fi country code | `ro.boot.wificountrycode=US`; kernel regdomain `country US: DFS-FCC` after wpa_supplicant starts — no manual `iw reg set` |
+| `setCountryCode` fallback | **Load-bearing.** Log: `setCountryCode: vendor HAL returned -3; falling back to nl80211 NL80211_CMD_REQ_SET_REG`. `-3` is `WIFI_ERROR_NOT_SUPPORTED`, exactly as predicted |
+| 5 GHz SoftAP | **Works via the framework.** `SAP is enabled successfully`, `AP-ENABLED`, 80 MHz on ch149/157, and an external Mac sees the SSID beaconing. Previously hostapd exited in 0.69 s |
+| `mDriverCountryCode` | `US` (was `null`); framework enumerates 5 GHz AP channels `[34…165]` |
+| `/dev/media0` label | `u:object_r:media_device:s0` |
+| Audio / USB props | `persist.vendor.audio.device=hdmi0`, `ro.audio.usb.period_us=10000`, `ro.audio.usb.period_count=8` |
+| `service.adb.root=1` | root shell without `adb root` |
+
+Still unproven, because they need a running CarPlay session or hardware that was
+not attached:
+
+- the HEVC decoder fast path (`external_ffmpeg_codec2`) — needs a session; the
+  fallback means a failure degrades to the old two-pass path rather than breaking
+- USB audio period retune — needs a USB audio device attached
+- RFCOMM is enabled in the kernel but iAP2-over-Bluetooth has not been run against it
+
+Car audio remains in legacy mode by design — see the note in the top-level README.

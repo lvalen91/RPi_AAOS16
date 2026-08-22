@@ -1,4 +1,4 @@
-From b9c076007b21ca63185d67adc84fe468072e06cc Mon Sep 17 00:00:00 2001
+From 640507be2791362416f911f416578dcdc32e01ec Mon Sep 17 00:00:00 2001
 From: lvalen91 <40876073+lvalen91@users.noreply.github.com>
 Date: Sat, 22 Aug 2026 02:01:34 -0800
 Subject: [PATCH] rpi4: defconfig: build RFCOMM into the kernel
