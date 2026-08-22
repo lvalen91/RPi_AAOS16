@@ -94,6 +94,23 @@ make bootimage systemimage vendorimage -j"$JOBS"
 # raspberry-vanilla manifest (see reference/raspberry-vanilla/manifest_brcm_rpi.xml).
 MKIMG="./${BOARD}-mkimg.sh"
 [ -x "$MKIMG" ] || MKIMG="bash ./${BOARD}-mkimg.sh"
+
+# rpi{4,5}-mkimg.sh hard-refuses to overwrite ("<name> already exists!") and the
+# name it picks is date-stamped, so a SECOND build on the same day aborts at the
+# very last step — after the whole tree has been rebuilt. Every partition image
+# is already correct at that point, which makes it read like a build failure when
+# it is really just a naming collision. Rotate the previous image aside instead.
+# Hit on 2026-08-22 rebuilding to pick up a same-day fix.
+# Rotate EVERY existing image, not just one: the out dir accumulates images from
+# previous build dates, and picking the first `ls` match rotates the oldest one
+# (alphabetical order) while leaving today's collision in place. Only clearing
+# all of them guarantees mkimg's target name is free.
+for prev in "$ANDROID_PRODUCT_OUT"/RaspberryVanillaAOSP*"${BOARD}"*.img; do
+  [ -f "$prev" ] || continue
+  echo "[build] rotating aside: $(basename "$prev") -> .prev"
+  mv -f "$prev" "${prev}.prev"
+done
+
 echo "[build] $MKIMG"
 $MKIMG
 
